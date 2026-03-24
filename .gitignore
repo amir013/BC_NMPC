@@ -7,8 +7,6 @@ report.md
 
 # Generated files
 results/plots/*.png
-results/models/*.pth
-data/*.npz
 
 # Python
 __pycache__/
