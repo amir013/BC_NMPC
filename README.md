@@ -1,4 +1,4 @@
-# Imitation Learning for Monopropellant Rocket Engine Control
+# Imitation Learning for Monopropellant Rocket Engine Thrust Control
 
 A machine learning approach to replace real-time NMPC control with a lightweight neural network for monopropellant rocket engine control.
 
