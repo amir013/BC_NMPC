@@ -6,7 +6,6 @@ reference.md
 report.md
 
 # Generated files
-results/plots/*.png
 
 # Python
 __pycache__/
