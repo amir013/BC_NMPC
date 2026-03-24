@@ -1,0 +1,34 @@
+# Documentation (local/personal notes)
+CLAUDE.md
+claude.md
+plan.md
+reference.md
+
+# Generated files
+results/plots/*.png
+results/models/*.pth
+data/*.npz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
+rocket/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
