@@ -1,93 +1,202 @@
-# rocketIL
+# Imitation Learning for Monopropellant Rocket Engine Control
 
+A machine learning approach to replace real-time NMPC control with a lightweight neural network for monopropellant rocket engine control.
 
+## Project Overview
 
-## Getting started
+**Goal:** Train a neural network via behavior cloning to imitate NMPC (Nonlinear Model Predictive Control) for a monopropellant rocket engine system.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+**Why:** NMPC solves complex optimization every 50ms but is too computationally expensive for embedded deployment. A neural network can learn the same control policy and execute it in microseconds.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+**NN Mapping:**
+```
+f(p_c, p_c_ref, kv_prev) → kv_set
+```
+- `p_c`: Current chamber pressure
+- `p_c_ref`: Target chamber pressure
+- `kv_prev`: Previous valve command
+- `kv_set`: Valve command output (constrained to [0.1, 1.0])
 
-## Add your files
+## System Architecture
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### Physical System
+```
+Tank (30 bar) → Pipe → Valve → Chamber → Nozzle
+   p_bc         m_p,p_p   kv      p_c      exhaust
+```
+
+### Two Models
+
+| Model | States | Purpose | Implementation |
+|-------|--------|---------|-----------------|
+| **Monoprop_sim** | 4-state: [m_p, p_p, kv, p_c] | Ground truth simulation | NumPy |
+| **Monoprop** | 1-state: [p_c] | MPC optimization (reduced-order) | CasADi symbolic |
+
+### Key Parameters
+
+- **Sampling time:** h_mpc = 0.05s (50ms)
+- **Prediction horizon:** 1.0s (20 steps)
+- **Valve constraints:** 0.1 ≤ kv ≤ 1.0, |dkv/dt| ≤ 1.43 m³/h/s
+- **Operating range:** 9–15.5 bar
+- **Fluid:** Ethanol (C2H6O)
+
+## Setup
+
+### 1. Clone the Repository
+
+```bash
+git clone <repo-url>
+cd BC_NMPC
+```
+
+### 2. Create Virtual Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+On Windows:
+```bash
+venv\Scripts\activate
+```
+
+### 3. Install Dependencies
+
+```bash
+pip install numpy scipy matplotlib torch casadi CoolProp ipykernel
+```
+
+### 4. Register Jupyter Kernel (for notebooks)
+
+```bash
+python3 -m ipykernel install --user --name=venv --display-name="Python (venv)"
+```
+
+> **Note:** If `python3` resolves to the system interpreter instead of the venv, use the full path:
+> ```bash
+> /path/to/BC_NMPC/venv/bin/python3 scripts/<script>.py
+> ```
+
+## Quick Start
+
+### 1. Collect Training Data
+```bash
+python3 scripts/collect_data.py
+```
+Generates 125 episodes × 80 steps = 10,000 state-action samples.
+Output: `data/bc_dataset_v6.npz`
+
+### 2. Train Neural Network
+```bash
+python3 scripts/train_nn.py
+```
+Trains a 3→5→5→1 neural network with weighted MSE loss.
+Outputs:
+- `results/models/policy_model.pth` — trained model weights + normalization stats
+- `results/plots/training_curve_*.png` — loss curves
+- `results/plots/prediction_results_*.png` — prediction accuracy
+
+### 3. Validate Against NMPC
+```bash
+python3 scripts/validate_nn.py
+```
+Compares NN vs reactive NMPC on 3 random 5s episodes.
+Output: `results/plots/validation_v6.png`
+
+### 4. Covariate Shift Tests
+```bash
+# OOD reference steps (above 15.5 bar and below 9.0 bar)
+python3 scripts/covariate_shift_test.py
+
+# Measurement noise on p_c (0.1, 0.3, 0.5 bar std)
+python3 scripts/covariate_shift_2.py
+
+# Unmodelled tank pressure drop disturbance
+python3 scripts/covariate_shift_3.py
+```
+
+### 5. Run Jupyter Notebooks
+```bash
+jupyter notebook notebooks/
+```
+Select the **Python (venv)** kernel when opening a notebook. If the kernel is not listed, register it first (see Setup step 4).
+
+### 6. Run Original NMPC Demo
+```bash
+python3 scripts/main.py
+```
+
+## File Structure
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.lrz.de/controlllarrys/rocketil.git
-git branch -M main
-git push -uf origin main
+BC_NMPC/
+├── README.md
+├── .gitignore
+│
+├── src/                             # Physics models and NMPC solver
+│   ├── model.py                     # Monoprop_sim & Monoprop classes
+│   ├── mpc.py                       # NMPC solver (CasADi/IPOPT)
+│   ├── integrator.py                # RK4 numerical integration
+│   ├── reference.py                 # Reference trajectory generation
+│   └── plotting.py                  # Visualization utilities
+│
+├── scripts/                         # Behavior cloning pipeline
+│   ├── collect_data.py              # Data collection (parallel, ZOH, v6)
+│   ├── train_nn.py                  # Train policy network
+│   ├── validate_nn.py               # Compare NN vs NMPC (5s episodes)
+│   ├── covariate_shift_test.py      # OOD reference step tests
+│   ├── covariate_shift_2.py         # Measurement noise tests
+│   ├── covariate_shift_3.py         # Unmodelled tank pressure drop tests
+│   └── main.py                      # NMPC baseline demo
+│
+├── notebooks/                       # Jupyter analysis (Python (venv) kernel)
+│   ├── explore_dataset.ipynb        # Dataset statistics & distribution
+│   └── kv_pc_mapping.ipynb          # Valve-pressure steady-state mapping
+│
+├── data/                            # Datasets (generated, not tracked in git)
+│   └── bc_dataset_v6.npz
+│
+├── results/                         # Outputs (generated, not tracked in git)
+│   ├── models/
+│   │   └── policy_model.pth
+│   └── plots/
+│
+├── docs/                            # References & documentation
+│
+└── venv/                          # Python virtual environment (not tracked in git)
 ```
 
-## Integrate with your tools
+## Neural Network Architecture
 
-* [Set up project integrations](https://gitlab.lrz.de/controlllarrys/rocketil/-/settings/integrations)
+**Network Structure:** 3 → 5 → 5 → 1 (Tanh activations, sigmoid output)
+- Input: normalized p_c, normalized p_c_ref, raw kv_prev
+- Output: kv_set bounded to [0.1, 1.0]
 
-## Collaborate with your team
+**Loss Function:** Weighted MSE — active steps (|Δkv| ≥ 0.02) weighted 5×
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+**Training Strategy:**
+- Adam optimizer, lr = 1e-3
+- ReduceLROnPlateau (halve LR after 30 epochs without improvement)
+- Early stopping (patience = 100 epochs, restores best weights)
+- Episode-based 80/20 train/test split (prevents data leakage)
 
-## Test and Deploy
+**Normalization:** p_c and p_c_ref normalized to zero mean, unit variance. Stats saved in `policy_model.pth` alongside weights.
 
-Use the built-in continuous integration in GitLab.
+## Dataset (v6)
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+- **125 episodes × 80 steps = 10,000 samples**
+- ZOH step references within [9.0, 15.5] bar operating range
+- Reactive NMPC expert (current reference only, no lookahead)
+- Parallel collection using 8 workers (~5–10 minutes)
+- Raw physical values stored (normalization done at training time)
 
-***
+## Dependencies
 
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```
+numpy, scipy, matplotlib
+torch        # Neural network training
+casadi       # NMPC optimization (CasADi/IPOPT)
+CoolProp     # Fluid thermodynamic properties
+ipykernel    # Jupyter notebook support
+```
