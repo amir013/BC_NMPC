@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
-from scipy.optimize import brentq
+import time
 from model import Monoprop_sim, Monoprop
 from mpc import NMPC
 
@@ -89,6 +89,7 @@ def run_simulation(controller, sim, y0, pc_ref_traj, is_nmpc=False, mpc_obj=None
 
     states = np.zeros((4, N * sim_steps))
     control_inputs = np.zeros(N)
+    solve_times = []
     states[:, 0] = y0
     kv_prev = y0[2]
 
@@ -101,6 +102,7 @@ def run_simulation(controller, sim, y0, pc_ref_traj, is_nmpc=False, mpc_obj=None
             ygoal = np.array([[p_c_ref] * (N_PRED + 1)])
             c_star, rho_p, eta_p, sos_p, zeta_p = helper(p_c_curr, sim)
             params = [sim.Ath, c_star, P_BC, rho_p, zeta_p, TV]
+            t0 = time.perf_counter()
             _, ctrl_input, _ = mpc_obj.solve(
                 mpc_model.xdot_func, mpc_model.x, mpc_model.u,
                 mpc_model.n_params, params,
@@ -108,9 +110,12 @@ def run_simulation(controller, sim, y0, pc_ref_traj, is_nmpc=False, mpc_obj=None
                 actor_constraint={'ubg': [1], 'lbg': [0.1]},
                 actor_rate={'ubg': [1.43], 'lbg': [-1.43]}
             )
+            solve_times.append((time.perf_counter() - t0) * 1000)
             kv_set = float(ctrl_input)
         else:
+            t0 = time.perf_counter()
             kv_set = controller.get_action(p_c_curr, p_c_ref, kv_prev)
+            solve_times.append((time.perf_counter() - t0) * 1000)
 
         control_inputs[k] = kv_set
         sim_sol = sim.integrate(y0, kv_set, sim_steps)
@@ -118,7 +123,7 @@ def run_simulation(controller, sim, y0, pc_ref_traj, is_nmpc=False, mpc_obj=None
         y0 = sim_sol[:, -1]
         kv_prev = kv_set
 
-    return states, control_inputs
+    return states, control_inputs, np.array(solve_times)
 
 def generate_zoh_trajectory(p_c0, kv_min=0.405, kv_max=0.841):
     """Generate ZOH step reference trajectory extended by T_PRED for full 5s control."""
@@ -156,6 +161,7 @@ if __name__ == "__main__":
 
     # Test on 3 random episodes with ZOH references
     fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+    all_nn_times, all_nmpc_times = [], []
     for i in range(3):
         kv_init = np.random.uniform(0.40, 0.80)
         initial_guess = [0.5, 0.5, 25e5, 20e5, 0.7, 100, 1800]
@@ -164,8 +170,10 @@ if __name__ == "__main__":
 
         pc_ref_traj = generate_zoh_trajectory(steady_sol[3])
 
-        s_nn, c_nn = run_simulation(nn_controller, sim, y0.copy(), pc_ref_traj)
-        s_nmpc, c_nmpc = run_simulation(None, sim, y0.copy(), pc_ref_traj, is_nmpc=True, mpc_obj=mpc_obj, mpc_model=mpc_model)
+        s_nn, c_nn, t_nn = run_simulation(nn_controller, sim, y0.copy(), pc_ref_traj)
+        s_nmpc, c_nmpc, t_nmpc = run_simulation(None, sim, y0.copy(), pc_ref_traj, is_nmpc=True, mpc_obj=mpc_obj, mpc_model=mpc_model)
+        all_nn_times.extend(t_nn)
+        all_nmpc_times.extend(t_nmpc)
 
         sim_steps      = int(np.ceil(H_MPC / H_SIM))
         controlled_pts = (len(pc_ref_traj) - N_PRED) * sim_steps
@@ -173,13 +181,21 @@ if __name__ == "__main__":
         axes[i].plot(t_sim, s_nn[3,   :controlled_pts]/1e5, 'b-',  label='NN',   linewidth=2)
         axes[i].plot(t_sim, s_nmpc[3, :controlled_pts]/1e5, 'r--', label='NMPC', linewidth=2)
         axes[i].plot(np.linspace(0, DURATION, len(pc_ref_traj) - N_PRED), pc_ref_traj[:len(pc_ref_traj) - N_PRED]/1e5, 'g:', label='Ref', linewidth=2)
-        axes[i].set_title(f"Validation Episode {i+1} (v6 - Reactive NMPC)")
-        axes[i].set_ylabel('Pressure [bar]')
-        axes[i].legend()
+        axes[i].set_title(f"Validation Episode {i+1} (v6 - Reactive NMPC)", fontsize=14)
+        axes[i].set_ylabel('Pressure [bar]', fontsize=13)
+        axes[i].tick_params(labelsize=12)
+        axes[i].legend(fontsize=12)
         axes[i].grid(True)
 
-    axes[-1].set_xlabel('Time [s]')
+    axes[-1].set_xlabel('Time [s]', fontsize=13)
     plt.tight_layout()
+
+    # Print timing statistics
+    nn_times = np.array(all_nn_times)
+    nmpc_times = np.array(all_nmpc_times)
+    print("\n--- Inference Timing (ms) ---")
+    print(f"NN   — mean: {nn_times.mean():.4f}, std: {nn_times.std():.4f}, min: {nn_times.min():.4f}, max: {nn_times.max():.4f}")
+    print(f"NMPC — mean: {nmpc_times.mean():.2f}, std: {nmpc_times.std():.2f}, min: {nmpc_times.min():.2f}, max: {nmpc_times.max():.2f}")
     plots_dir = os.path.join(os.path.dirname(__file__), '..', 'results', 'plots')
     os.makedirs(plots_dir, exist_ok=True)
     plot_path = os.path.join(plots_dir, 'validation_v6.png')

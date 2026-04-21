@@ -215,19 +215,21 @@ def plot_predictions(model, X_test, y_test, arch_tag=''):
     plt.subplot(1, 2, 1)
     plt.scatter(y_test, y_pred, alpha=0.5, s=10)
     plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', label='Perfect')
-    plt.xlabel('Actual kv_set (normalized)')
-    plt.ylabel('Predicted kv_set (normalized)')
-    plt.title('Predicted vs Actual')
-    plt.legend()
+    plt.xlabel('Actual kv_set (normalized)', fontsize=13)
+    plt.ylabel('Predicted kv_set (normalized)', fontsize=13)
+    plt.title('Predicted vs Actual', fontsize=14)
+    plt.tick_params(labelsize=12)
+    plt.legend(fontsize=12)
     plt.grid(True)
 
     # Error histogram
     plt.subplot(1, 2, 2)
     errors = y_pred - y_test
     plt.hist(errors, bins=50, edgecolor='black')
-    plt.xlabel('Prediction Error')
-    plt.ylabel('Count')
-    plt.title(f'Error Distribution (std={errors.std():.4f})')
+    plt.xlabel('Prediction Error', fontsize=13)
+    plt.ylabel('Count', fontsize=13)
+    plt.title(f'Error Distribution (std={errors.std():.4f})', fontsize=14)
+    plt.tick_params(labelsize=12)
     plt.grid(True)
 
     plt.tight_layout()

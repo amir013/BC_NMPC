@@ -1,202 +1,226 @@
-# Imitation Learning for Monopropellant Rocket Engine Control
+# Imitation Learning for Optimal Thrust Control of Rocket Engines
 
-A machine learning approach to replace real-time NMPC control with a lightweight neural network for monopropellant rocket engine control.
+Behaviour cloning (BC) is used to train a compact neural network (NN) that imitates a Nonlinear Model Predictive Controller (NMPC) for a monopropellant rocket engine. The NN achieves comparable closed-loop pressure tracking performance to the NMPC expert at a fraction of the computational cost — enabling real-time deployment on embedded hardware.
 
-## Project Overview
+---
 
-**Goal:** Train a neural network via behavior cloning to imitate NMPC (Nonlinear Model Predictive Control) for a monopropellant rocket engine system.
+## Motivation
 
-**Why:** NMPC solves complex optimization every 50ms but is too computationally expensive for embedded deployment. A neural network can learn the same control policy and execute it in microseconds.
+NMPC provides effective pressure regulation but invokes an iterative nonlinear solver (CasADi/IPOPT) at every 50ms control step, requiring 54–456ms per call on a standard desktop CPU (AMD Ryzen 5 5500U). This leaves no margin for embedded deployment. A NN can replicate the same control policy in under 1ms via a single forward pass.
 
-**NN Mapping:**
-```
-f(p_c, p_c_ref, kv_prev) → kv_set
-```
-- `p_c`: Current chamber pressure
-- `p_c_ref`: Target chamber pressure
-- `kv_prev`: Previous valve command
-- `kv_set`: Valve command output (constrained to [0.1, 1.0])
+---
 
-## System Architecture
+## System Overview
 
 ### Physical System
 ```
-Tank (30 bar) → Pipe → Valve → Chamber → Nozzle
-   p_bc         m_p,p_p   kv      p_c      exhaust
+Tank (30 bar) → Pipe → Valve (kv) → Chamber → Nozzle
+   p_bc          ṁ_p, p_p            p_c       exhaust
 ```
 
 ### Two Models
 
-| Model | States | Purpose | Implementation |
-|-------|--------|---------|-----------------|
-| **Monoprop_sim** | 4-state: [m_p, p_p, kv, p_c] | Ground truth simulation | NumPy |
-| **Monoprop** | 1-state: [p_c] | MPC optimization (reduced-order) | CasADi symbolic |
+| Model | States | Purpose |
+|-------|--------|---------|
+| **Monoprop_sim** (full-order) | $[\dot{m}_p, p_p, k_v, p_c]^\top$ | Ground truth simulation for data collection |
+| **Monoprop** (reduced-order) | $[p_c]^\top$ | NMPC prediction model (quasi-steady pipe dynamics) |
+
+The full-order model is used as the closed-loop simulation environment during data collection. The NMPC uses the reduced-order model internally for prediction.
 
 ### Key Parameters
 
-- **Sampling time:** h_mpc = 0.05s (50ms)
-- **Prediction horizon:** 1.0s (20 steps)
-- **Valve constraints:** 0.1 ≤ kv ≤ 1.0, |dkv/dt| ≤ 1.43 m³/h/s
-- **Operating range:** 9–15.5 bar
-- **Fluid:** Ethanol (C2H6O)
+| Parameter | Value |
+|-----------|-------|
+| Sampling time | 50ms |
+| Prediction horizon | 1.0s (20 steps) |
+| Valve bounds | $k_v \in [0.1, 1.0]$ |
+| Rate limit | $\|\dot{k}_v\| \leq 1.43\,\text{m}^3/\text{h/s}$ |
+| Operating range | 9.0 – 15.5 bar |
+| Fluid | Ethanol (C₂H₆O) |
+| Tank pressure | 30 bar |
+
+---
+
+## Neural Network Policy
+
+**Mapping:** $f(p_c,\, p_{c,\text{ref}},\, k_{v,\text{prev}}) \rightarrow k_{v,\text{set}}$
+
+- `p_c` — current chamber pressure (normalised)
+- `p_c_ref` — reference chamber pressure (normalised)
+- `kv_prev` — previous valve command (raw, included because NMPC is a set-point tracker)
+- `kv_set` — valve command output, bounded to [0.1, 1.0]
+
+**Architecture:** 3 → 5 → 5 → 1 (56 parameters)
+- Two hidden layers with Tanh activations
+- Sigmoid output layer bounding $\hat{k}_v \in [0.1, 1.0]$
+- Architecture chosen empirically — larger configurations showed no improvement on this near-linear mapping
+
+**Loss Function:** Weighted MSE — active steps ($|\Delta k_v| \geq 0.02$) weighted 5× over idle steps
+
+**Training:**
+- Adam optimiser, lr = $10^{-3}$
+- ReduceLROnPlateau scheduler (halve LR after 30 epochs without improvement)
+- Early stopping (patience = 100 epochs, restores best weights)
+- Episode-level 80/20 train/test split (prevents data leakage)
+
+---
+
+## Results
+
+### Training
+![Training Curve](results/plots/training_curve_3_5_5_1.png)
+*Train and test losses track closely — no overfitting. Converges in ~300–500 epochs.*
+
+### Open-Loop Prediction Accuracy
+![Prediction Results](results/plots/prediction_results_3_5_5_1.png)
+*Predicted vs actual $k_v$ on held-out test set. Error std = 0.0022, MSE = $4.0 \times 10^{-6}$.*
+
+### Closed-Loop Validation vs NMPC
+![Validation](results/plots/validation_v6.png)
+*NN (blue) vs reactive NMPC (red dashed) vs reference (green dotted) across 3 random episodes. Step response times and steady-state errors are comparable.*
+
+### Out-of-Distribution Robustness
+![Covariate Shift](results/plots/covariate_shift_3.png)
+*OOD testing: initial valve positions outside training range and reference steps outside [9.0, 15.5] bar. Moderately OOD conditions self-correct via $p_c$ feedback; strongly OOD inputs cause tanh saturation.*
+
+### Computational Performance
+
+| Controller | Mean (ms) | Std (ms) | Min (ms) | Max (ms) |
+|------------|-----------|----------|----------|----------|
+| NN | 0.32 | 0.07 | 0.27 | 0.98 |
+| NMPC | 60.6 | 23.8 | 53.9 | 456.4 |
+
+*Measured on AMD Ryzen 5 5500U. ~190× speedup.*
+
+---
 
 ## Setup
 
 ### 1. Clone the Repository
-
 ```bash
 git clone <repo-url>
 cd BC_NMPC
 ```
 
 ### 2. Create Virtual Environment
-
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-On Windows:
-```bash
-venv\Scripts\activate
+python3 -m venv rocket
+source rocket/bin/activate
 ```
 
 ### 3. Install Dependencies
-
 ```bash
 pip install numpy scipy matplotlib torch casadi CoolProp ipykernel
 ```
 
 ### 4. Register Jupyter Kernel (for notebooks)
-
 ```bash
-python3 -m ipykernel install --user --name=venv --display-name="Python (venv)"
+python3 -m ipykernel install --user --name=rocket --display-name="Python (rocket)"
 ```
 
-> **Note:** If `python3` resolves to the system interpreter instead of the venv, use the full path:
-> ```bash
-> /path/to/BC_NMPC/venv/bin/python3 scripts/<script>.py
-> ```
+---
 
 ## Quick Start
 
-### 1. Collect Training Data
+### Step 1 — Collect Training Data
 ```bash
-python3 scripts/collect_data.py
+cd scripts && python3 collect_data.py
 ```
-Generates 125 episodes × 80 steps = 10,000 state-action samples.
+Generates 125 episodes × 80 steps = 10,000 state-action samples using parallel NMPC rollouts (8 workers, ~5–10 minutes).
 Output: `data/bc_dataset_v6.npz`
 
-### 2. Train Neural Network
+### Step 2 — Train Neural Network
 ```bash
-python3 scripts/train_nn.py
+python3 train_nn.py
 ```
-Trains a 3→5→5→1 neural network with weighted MSE loss.
 Outputs:
-- `results/models/policy_model.pth` — trained model weights + normalization stats
-- `results/plots/training_curve_*.png` — loss curves
-- `results/plots/prediction_results_*.png` — prediction accuracy
+- `results/models/policy_model.pth` — weights + normalisation stats
+- `results/plots/training_curve_*.png`
+- `results/plots/prediction_results_*.png`
 
-### 3. Validate Against NMPC
+### Step 3 — Validate Against NMPC
 ```bash
-python3 scripts/validate_nn.py
+python3 validate_nn.py
 ```
-Compares NN vs reactive NMPC on 3 random 5s episodes.
+Compares NN vs reactive NMPC on 3 random 5s episodes. Prints timing statistics.
 Output: `results/plots/validation_v6.png`
 
-### 4. Covariate Shift Tests
+### Step 4 — OOD / Covariate Shift Tests
 ```bash
-# OOD reference steps (above 15.5 bar and below 9.0 bar)
-python3 scripts/covariate_shift_test.py
-
-# Measurement noise on p_c (0.1, 0.3, 0.5 bar std)
-python3 scripts/covariate_shift_2.py
-
-# Unmodelled tank pressure drop disturbance
-python3 scripts/covariate_shift_3.py
+python3 covariate_shift_3.py   # OOD references + disturbances
+python3 covariate_shift_2.py   # Measurement noise
 ```
 
-### 5. Run Jupyter Notebooks
+### Step 5 — Explore Dataset (Jupyter)
 ```bash
 jupyter notebook notebooks/
 ```
-Select the **Python (venv)** kernel when opening a notebook. If the kernel is not listed, register it first (see Setup step 4).
+- `explore_dataset.ipynb` — dataset distributions and episode quality
+- `kv_pc_mapping.ipynb` — steady-state $k_v$–$p_c$ mapping linearity
 
-### 6. Run Original NMPC Demo
-```bash
-python3 scripts/main.py
-```
+---
 
 ## File Structure
 
 ```
 BC_NMPC/
-├── README.md
-├── .gitignore
+├── src/                        # Physics models and NMPC solver
+│   ├── model.py                # Monoprop_sim (4-state) & Monoprop (1-state)
+│   ├── mpc.py                  # NMPC solver (CasADi/IPOPT)
+│   ├── integrator.py           # RK4 numerical integration
+│   ├── reference.py            # Reference trajectory generation
+│   └── plotting.py             # Visualization utilities
 │
-├── src/                             # Physics models and NMPC solver
-│   ├── model.py                     # Monoprop_sim & Monoprop classes
-│   ├── mpc.py                       # NMPC solver (CasADi/IPOPT)
-│   ├── integrator.py                # RK4 numerical integration
-│   ├── reference.py                 # Reference trajectory generation
-│   └── plotting.py                  # Visualization utilities
+├── scripts/                    # Behaviour cloning pipeline
+│   ├── collect_data.py         # Parallel data collection (ZOH references, v6)
+│   ├── train_nn.py             # Train policy network
+│   ├── validate_nn.py          # Compare NN vs NMPC with timing stats
+│   ├── covariate_shift_2.py    # Measurement noise robustness test
+│   ├── covariate_shift_3.py    # Tank pressure drop + OOD test
+│   └── main.py                 # Original NMPC demo
 │
-├── scripts/                         # Behavior cloning pipeline
-│   ├── collect_data.py              # Data collection (parallel, ZOH, v6)
-│   ├── train_nn.py                  # Train policy network
-│   ├── validate_nn.py               # Compare NN vs NMPC (5s episodes)
-│   ├── covariate_shift_test.py      # OOD reference step tests
-│   ├── covariate_shift_2.py         # Measurement noise tests
-│   ├── covariate_shift_3.py         # Unmodelled tank pressure drop tests
-│   └── main.py                      # NMPC baseline demo
+├── notebooks/
+│   ├── explore_dataset.ipynb   # Dataset statistics and distributions
+│   └── kv_pc_mapping.ipynb     # kv–pc steady-state mapping analysis
 │
-├── notebooks/                       # Jupyter analysis (Python (venv) kernel)
-│   ├── explore_dataset.ipynb        # Dataset statistics & distribution
-│   └── kv_pc_mapping.ipynb          # Valve-pressure steady-state mapping
+├── report/                     # Forschungspraxis paper (LaTeX)
+│   ├── FP_paper.tex
+│   └── chapters/
 │
-├── data/                            # Datasets (generated, not tracked in git)
+├── data/                       # Generated datasets (not tracked in git)
 │   └── bc_dataset_v6.npz
 │
-├── results/                         # Outputs (generated, not tracked in git)
-│   ├── models/
-│   │   └── policy_model.pth
-│   └── plots/
-│
-├── docs/                            # References & documentation
-│
-└── venv/                          # Python virtual environment (not tracked in git)
+└── results/                    # Generated outputs (not tracked in git)
+    ├── models/
+    │   └── policy_model.pth
+    └── plots/
 ```
 
-## Neural Network Architecture
-
-**Network Structure:** 3 → 5 → 5 → 1 (Tanh activations, sigmoid output)
-- Input: normalized p_c, normalized p_c_ref, raw kv_prev
-- Output: kv_set bounded to [0.1, 1.0]
-
-**Loss Function:** Weighted MSE — active steps (|Δkv| ≥ 0.02) weighted 5×
-
-**Training Strategy:**
-- Adam optimizer, lr = 1e-3
-- ReduceLROnPlateau (halve LR after 30 epochs without improvement)
-- Early stopping (patience = 100 epochs, restores best weights)
-- Episode-based 80/20 train/test split (prevents data leakage)
-
-**Normalization:** p_c and p_c_ref normalized to zero mean, unit variance. Stats saved in `policy_model.pth` alongside weights.
+---
 
 ## Dataset (v6)
 
-- **125 episodes × 80 steps = 10,000 samples**
+- **10,000 samples** across 125 episodes (80 steps each, 5s at 50ms)
 - ZOH step references within [9.0, 15.5] bar operating range
-- Reactive NMPC expert (current reference only, no lookahead)
-- Parallel collection using 8 workers (~5–10 minutes)
-- Raw physical values stored (normalization done at training time)
+- Reactive NMPC expert (current reference only — no future lookahead)
+- Parallel collection using `multiprocessing.Pool` with 8 workers
+- Episode-level train/test split to prevent data leakage
+
+---
 
 ## Dependencies
 
 ```
 numpy, scipy, matplotlib
 torch        # Neural network training
-casadi       # NMPC optimization (CasADi/IPOPT)
+casadi       # NMPC optimisation (CasADi/IPOPT)
 CoolProp     # Fluid thermodynamic properties
 ipykernel    # Jupyter notebook support
 ```
+
+---
+
+## Report
+
+The full methodology, results, and discussion are documented in the Forschungspraxis paper:
+`report/FP_paper.pdf` — *Imitation Learning for Optimal Thrust Control of Rocket Engines*, Amir Suhail Salim, TUM 2026.

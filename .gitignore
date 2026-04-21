@@ -3,11 +3,13 @@ CLAUDE.md
 claude.md
 plan.md
 reference.md
+report.md
+
+# Report (LaTeX source and build files — keep only PDF)
+report/*
+!report/FP_paper.pdf
 
 # Generated files
-results/plots/*.png
-results/models/*.pth
-data/*.npz
 
 # Python
 __pycache__/
