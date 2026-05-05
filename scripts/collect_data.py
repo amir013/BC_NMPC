@@ -16,8 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import numpy as np
 import time
-import gc
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool
 from scipy.optimize import brentq
 
 # --- Configuration ---
@@ -139,7 +138,7 @@ def collect_dataset(n_episodes=125, n_workers=None):
 
     os.makedirs('dataset', exist_ok=True)
 
-    print(f"Computing kv bounds...")
+    print("Computing kv bounds...")
     kv_min, kv_max = _get_kv_bounds()
     print(f"kv range for [9.0, 15.5] bar: [{kv_min:.4f}, {kv_max:.4f}]")
 
@@ -180,6 +179,6 @@ if __name__ == "__main__":
              kv_prev=dataset['kv_prev'],
              kv_set=dataset['kv_set'])
 
-    print(f"\nCollection complete!")
+    print("\nCollection complete!")
     print(f"Total samples: {len(dataset['p_c'])}")
     print(f"Saved: {data_path}")

@@ -210,7 +210,7 @@ if __name__ == "__main__":
         # Show true P_BC on secondary axis
         ax2_twin = ax.twinx()
         p_bc_true = np.array([P_BC_0 - drop_rate * k * H_MPC for k in range(N - N_PRED)])
-        p_bc_true = np.maximum(p_bc_true, 10e5)
+        p_bc_true = np.maximum(p_bc_true, 20e5)
         ax2_twin.plot(t_ctrl, p_bc_true/1e5, 'k:', lw=1, label='True P_BC')
         ax2_twin.set_ylabel('Tank P_BC [bar]', color='k', fontsize=8)
         ax2_twin.tick_params(axis='y', labelsize=7)
